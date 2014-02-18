@@ -123,7 +123,7 @@ class GitHub(object):
         url = self.BASE_AUTH_URL + 'access_token'
         logger.debug("POSTing to %s", url)
         logger.debug(params)
-        response = self.session.post(url, data=params)
+        response = self.session.post(url, data=json.dumps(params))
         data = parse_qs(response.content)
         logger.debug("response.content = %s", data)
         for k, v in data.items():
