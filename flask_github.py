@@ -8,13 +8,12 @@
 """
 import logging
 try:
-    from urllib.parse import urlencode, parse_qs
+    from urllib.parse import urlencode
 except ImportError:
     from urllib import urlencode
-    from urlparse import parse_qs
 from functools import wraps
 
-import requests
+from httplib2 import Http
 from flask import redirect, request, json
 
 __version__ = '0.3.4'
@@ -27,14 +26,14 @@ class GitHubError(Exception):
 
     def __str__(self):
         try:
-            message = self.response.json()['message']
+            message = self.response['message']
         except Exception:
             message = None
-        return "%s: %s" % (self.response.status_code, message)
+        return "%s: %s" % (self.response.status, message)
 
     @property
     def response(self):
-        """The :class:`~requests.Response` object for the request."""
+        """The response object for the request."""
         return self.args[0]
 
 
@@ -59,7 +58,7 @@ class GitHub(object):
         self.client_secret = app.config['GITHUB_CLIENT_SECRET']
         self.callback_url = app.config['GITHUB_CALLBACK_URL']
         self.base_url = app.config.get('GITHUB_BASE_URL', self.BASE_URL)
-        self.session = requests.session()
+        self.http = Http()
 
     def access_token_getter(self, f):
         """
@@ -124,80 +123,81 @@ class GitHub(object):
         url = self.BASE_AUTH_URL + 'access_token'
         logger.debug("POSTing to %s", url)
         logger.debug(params)
-        response = self.session.post(url, data=params)
-        data = parse_qs(response.content)
-        logger.debug("response.content = %s", data)
-        for k, v in data.items():
-            if len(v) == 1:
-                data[k] = v[0]
-        token = data.get(b'access_token', None)
-        if token is not None:
-            token = token.decode('ascii')
-        return token
+        resp, content = self.http.request(
+            url, method='POST', body=params,
+            headers={'Content-Type': 'application/json'})
+        if resp.status != 200:
+            return None
+        data = json.loads(content)
+        logger.debug("response.content = %s", content)
+        return data.get('access_token')
 
     def _handle_invalid_response(self):
         pass
 
-    def raw_request(self, method, resource, params=None, **kwargs):
+    def raw_request(self, method, resource, headers=None, body=None):
         """
-        Makes a HTTP request and returns the raw
-        :class:`~requests.Response` object.
+        Makes a HTTP request and returns a tuple consisting of the HTTP
+        response and content.
 
         """
-        if params is None:
-            params = {}
+        if not headers:
+            headers = {}
 
-        if 'access_token' not in params:
-            params['access_token'] = self.get_access_token()
+        # TODO: Safely add the access_token parameter.
+        url = '%s%s?access_token=%s' % (self.BASE_URL, resource,
+                                        self.get_access_token())
 
-        url = self.BASE_URL + resource
-        return self.session.request(
-            method, url, params=params, allow_redirects=True, **kwargs)
+        if not body:
+            return self.http.request(url, method=method, headers=headers)
+        else:
+            return self.http.request(url, method=method, headers=headers,
+                                     body=body)
 
-    def request(self, method, resource, **kwargs):
+    def request(self, method, resource, headers=None, body=None):
         """
         Makes a request to the given endpoint.
-        Keyword arguments are passed to the :meth:`~requests.request` method.
         If the content type of the response is JSON, it will be decoded
         automatically and a dictionary will be returned.
-        Otherwise the :class:`~requests.Response` object is returned.
+        Otherwise the raw content is returned.
 
         """
-        response = self.raw_request(method, resource, **kwargs)
+        resp, content = self.raw_request(method, resource, headers=headers,
+                                         body=body)
 
-        status_code = str(response.status_code)
+        status_code = str(resp.status)
 
         if status_code.startswith('4'):
-            raise GitHubError(response)
+            raise GitHubError(resp)
 
         assert status_code.startswith('2')
 
-        if response.headers['Content-Type'].startswith('application/json'):
-            return response.json()
+        if resp.get('content-type', '').startswith('application/json'):
+            return json.loads(content)
         else:
-            return response
+            return content
 
-    def get(self, resource, **kwargs):
+    def get(self, resource):
         """Shortcut for ``request('GET', resource)``."""
-        return self.request('GET', resource, **kwargs)
+        return self.request('GET', resource)
 
-    def post(self, resource, data, **kwargs):
+    def post(self, resource, data):
         """Shortcut for ``request('POST', resource)``.
         Use this to make POST request since it will also encode ``data`` to
-        'application/x-www-form-urlencoded' format."""
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        'application/json' format."""
+        headers = {'Content-Type': 'application/json'}
         data = json.dumps(data)
-        return self.request('POST', resource, headers=headers,
-                            data=data, **kwargs)
+        return self.request('POST', resource, headers=headers, data=data)
 
-    def head(self, resource, **kwargs):
-        return self.request('HEAD', resource, **kwargs)
+    def head(self, resource):
+        return self.request('HEAD', resource)
 
-    def patch(self, resource, **kwargs):
-        return self.request('PATCH', resource, **kwargs)
+    def patch(self, resource):
+        return self.request('PATCH', resource)
 
-    def put(self, resource, **kwargs):
-        return self.request('PUT', resource, **kwargs)
+    def put(self, resource):
+        return self.request('PUT', resource)
 
-    def delete(self, resource, **kwargs):
-        return self.request('DELETE', resource, **kwargs)
+    def delete(self, resource):
+        return self.request('DELETE', resource)
+
