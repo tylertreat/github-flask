@@ -120,10 +120,11 @@ class GitHub(object):
             'client_id': self.client_id,
             'client_secret': self.client_secret
         }
+        params = json.dumps(params)
         url = self.BASE_AUTH_URL + 'access_token'
         logger.debug("POSTing to %s", url)
         logger.debug(params)
-        response = self.session.post(url, data=json.dumps(params))
+        response = self.session.post(url, data=params)
         data = parse_qs(response.content)
         logger.debug("response.content = %s", data)
         for k, v in data.items():
